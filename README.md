@@ -2,8 +2,9 @@
 Encodes a sequence of YUV frames into HEVC (h.265) with transparency, using Nvidia's nvEncodeApi
 
 ## Dependencies
-- Nvidia's Video Codec SDK. This requires a Nvidia developer account and manual install of headers and libs
-- cmake
+- Nvidia's [Video Codec SDK](https://developer.nvidia.com/nvidia-video-codec-SDK). This requires a Nvidia developer account and manual install of headers and libs
+- [cmake](https://cmake.org) 3.14 or later
+- [CLI11](https://github.com/CLIUtils/CLI11)
 - Nvidia graphics card
 
 ## Getting started
