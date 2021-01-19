@@ -38,7 +38,7 @@ Now convert the video to a raw sequence of YUV 4:2:0 frames, all packed into one
 This file will be uncompressed so a large number of frames will take a lot of space.
 FFmpeg is the usual choice for this:
 
-`ffmpeg -i video.mp4 -c:v rawvideo -pix_fmt yuv420p video.yuv`
+`ffmpeg -i video.mp4 -c:v rawvideo -pix_fmt nv12 video.yuv`
 
 Finally, we need a transparency mask. This mask must be a grayscale image where a bright value represents more opacity, and dark value represents more transparency.
 For this test you can use any grayscale image, but it MUST have the same dimensions as the video.
@@ -54,7 +54,7 @@ This file will not play in standard players; it must first be packed into a cont
 Again, FFmpeg to the rescue:
 
 TODO, incomplete
-`ffmpeg -f video.h265 -pix_fmt yuv420p -s:v <width>x<height> -r 25 -i input.yuv -c:v libx264 output.mp4`
+`ffmpeg -f video.h265 -pix_fmt nv12 -s:v <width>x<height> -r 25 -i input.yuv -c:v libx264 output.mp4`
 
 Enjoy!
 -John
