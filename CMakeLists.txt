@@ -19,8 +19,12 @@ if ( WIN32 )
    set( CMAKE_GENERATOR_PLATFORM x64 CACHE INTERNAL "Force 64-bit compilation" )
 endif()
 
+# Hardcode CUDA paths since auto detection failed for me
+SET( CMAKE_CUDA_COMPILER /usr/local/cuda/bin/nvcc )
+include_directories( /usr/local/cuda/include )
+
 # Main project
-project( nvenc_h265_transparency )
+project( nvenc_h265_transparency LANGUAGES CXX CUDA )
 
 # Always look in /usr/local/include because this isn't default - sometimes.
 # Also check our code's root directory.
@@ -47,4 +51,4 @@ add_executable( nvenc_h265_transparency main.cpp utility.hpp )
 
 # Link local stuff first, then system stuff
 
-target_link_libraries( nvenc_h265_transparency nvidia-encode )
+target_link_libraries( nvenc_h265_transparency nvidia-encode nvcuvid cuda )

@@ -4,8 +4,9 @@
 #include <vector>
 #include <unordered_map>
 #include <sstream>
+#include <cstring>
 #include <CLI/CLI.hpp>
-//#include <cuda.h>
+#include <cuda.h>
 #include "utility.hpp"
 #include "nvEncodeAPI.h"
 
@@ -27,6 +28,7 @@ static const std::unordered_map< NV_ENC_CAPS, int > g_requiredCaps = {
    // Put caps and expected values here as {key,val} pairs
    { NV_ENC_CAPS_SUPPORT_ALPHA_LAYER_ENCODING, 1 }
 };
+NV_ENCODE_API_FUNCTION_LIST g_nvFunctions = { NV_ENCODE_API_FUNCTION_LIST_VER };
 
 struct MyNvBuffer
 {
@@ -72,7 +74,7 @@ int GetCapabilityValue( void * encoder,
     NV_ENC_CAPS_PARAM capsParam = { NV_ENC_CAPS_PARAM_VER };
     capsParam.capsToQuery = capsToQuery;
     int v;
-    NvEncGetEncodeCaps( encoder, encoderGuid, &capsParam, &v );
+    (*g_nvFunctions.nvEncGetEncodeCaps)( encoder, encoderGuid, &capsParam, &v );
     return v;
 }
 
@@ -130,12 +132,12 @@ MyNvBuffer LockInputBuffer( void * encoder,
    
    // Create a CUDA buffer
    size_t cudaWidth = width, cudaHeight = height, cudaPitch;
-//   if ( CUDA_SUCCESS != cuMemAllocPitch( (CUdevicptr **)returnValue.cudaBuffer,
-//      &cudaPitch,
-//       cudaWidth,
-//       cudaHeight,
-//       8 ) )
-//      throw std::runtime_error( "Could not allocate CUDA output buffer" );
+   if ( CUDA_SUCCESS != cuMemAllocPitch( (CUdeviceptr *)&returnValue.cudaBuffer,
+      &cudaPitch,
+      cudaWidth,
+      cudaHeight,
+      8 ) )
+      throw std::runtime_error( "Could not allocate CUDA output buffer" );
 
 // TODO: Read the data
    
@@ -154,7 +156,7 @@ MyNvBuffer LockInputBuffer( void * encoder,
       NV_ENC_INPUT_IMAGE,
       0
    };
-   CHECK( NvEncRegisterResource( encoder, &returnValue.registerResource ), "Failed registering CUDA buffer with encode session" );
+   CHECK( (*g_nvFunctions.nvEncRegisterResource)( encoder, &returnValue.registerResource ), "Failed registering CUDA buffer with encode session" );
    
    // Map as an input buffer
    returnValue.inputResource = {
@@ -164,16 +166,17 @@ MyNvBuffer LockInputBuffer( void * encoder,
       nullptr, NV_ENC_BUFFER_FORMAT_UNDEFINED, // These will be populated after the call to NvEncMapInputResource()
       0
    };
-   CHECK( NvEncMapInputResource( encoder, &returnValue.inputResource ), "Failed mapping CUDA buffer as encoder input" );
+   CHECK( (*g_nvFunctions.nvEncMapInputResource)( encoder, &returnValue.inputResource ), "Failed mapping CUDA buffer as encoder input" );
    
    // Create the image wrapper around this buffer
    returnValue.picParams = {
       NV_ENC_PIC_PARAMS_VER,
-      uint32_t(cudaWidth), uint32_t(cudaHeight), uint32_t(cudaPitch),
-      .inputBuffer = returnValue.inputResource.mappedResource,
-      .bufferFmt = g_inputFormat,
-      .pictureStruct = NV_ENC_PIC_STRUCT_FRAME
+      uint32_t(cudaWidth), uint32_t(cudaHeight), uint32_t(cudaPitch)
    };
+   
+   returnValue.picParams.inputBuffer = returnValue.inputResource.mappedResource;
+   returnValue.picParams.bufferFmt = g_inputFormat;
+   returnValue.picParams.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
    
    // Maintain an association between this cuda buffer and this NvResource
    //g_inputBuffers[ cudaBuffer ] = returnValue;
@@ -220,7 +223,7 @@ MyNvBuffer LockAlphaBuffer( void * encoder, const MyNvBuffer & inputBuffer )
          NV_ENC_INPUT_IMAGE,
          0
       };
-      CHECK( NvEncRegisterResource( encoder, &returnValue->registerResource ), "Failed registering CUDA buffer with encode session" );
+      CHECK( (*g_nvFunctions.nvEncRegisterResource)( encoder, &returnValue->registerResource ), "Failed registering CUDA buffer with encode session" );
    }
    
    // Map as an input buffer
@@ -231,18 +234,17 @@ MyNvBuffer LockAlphaBuffer( void * encoder, const MyNvBuffer & inputBuffer )
       nullptr, NV_ENC_BUFFER_FORMAT_UNDEFINED, // These will be populated after the call to NvEncMapInputResource()
       0
    };
-   CHECK( NvEncMapInputResource( encoder, &returnValue->inputResource ), "Failed mapping CUDA buffer as encoder input" );
+   CHECK( (*g_nvFunctions.nvEncMapInputResource)( encoder, &returnValue->inputResource ), "Failed mapping CUDA buffer as encoder input" );
    
    // Create the image wrapper around this buffer
    returnValue->picParams = {
       NV_ENC_PIC_PARAMS_VER,
       uint32_t(inputBuffer.registerResource.width),
-      uint32_t(inputBuffer.registerResource.height),
-      //uint32_t(cudaPitch),
-      .inputBuffer = returnValue->inputResource.mappedResource,
-      .bufferFmt = g_inputFormat,
-      .pictureStruct = NV_ENC_PIC_STRUCT_FRAME
+      uint32_t(inputBuffer.registerResource.height)
    };
+   returnValue->picParams.inputBuffer = returnValue->inputResource.mappedResource;
+   returnValue->picParams.bufferFmt = g_inputFormat;
+   returnValue->picParams.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
    
    return *returnValue;
 }
@@ -273,7 +275,7 @@ void * LockOutputBuffer( void * encoder,
          NV_ENC_OUTPUT_BITSTREAM,
          0
       };
-      CHECK( NvEncRegisterResource( encoder, &nvBuffer.registerResource ), "Failed registering CUDA buffer with encode session" );
+      CHECK( (*g_nvFunctions.nvEncRegisterResource)( encoder, &nvBuffer.registerResource ), "Failed registering CUDA buffer with encode session" );
       
       // Map as an input buffer
       nvBuffer.inputResource = {
@@ -283,14 +285,14 @@ void * LockOutputBuffer( void * encoder,
          nullptr, NV_ENC_BUFFER_FORMAT_UNDEFINED, // These will be populated after the call to NvEncMapInputResource()
          0
       };
-      CHECK( NvEncMapInputResource( encoder, &nvBuffer.inputResource ), "Failed mapping CUDA buffer as encoder input" );
+      CHECK( (*g_nvFunctions.nvEncMapInputResource)( encoder, &nvBuffer.inputResource ), "Failed mapping CUDA buffer as encoder input" );
       
       returnValue = nvBuffer.inputResource.mappedResource;
    }
    else
    {
       nvBuffer.outputBuffer = { NV_ENC_CREATE_BITSTREAM_BUFFER_VER };
-      CHECK( NvEncCreateBitstreamBuffer( encoder, &nvBuffer.outputBuffer ), "Failed creating output bitstream buffer" );
+      CHECK( (*g_nvFunctions.nvEncCreateBitstreamBuffer)( encoder, &nvBuffer.outputBuffer ), "Failed creating output bitstream buffer" );
       
       returnValue = nvBuffer.outputBuffer.bitstreamBuffer;
    }
@@ -304,18 +306,18 @@ void UnlockInputBuffer( void * encoder,
    MyNvBuffer & inputBuffer )
 {
    // Completely destroy the input
-   CHECK( NvEncUnmapInputResource( encoder, inputBuffer.inputResource.mappedResource ), "Failed unmapping input buffer" );
-   CHECK( NvEncUnregisterResource( encoder, inputBuffer.registerResource.registeredResource ), "Failed unmapping input buffer" );
+   CHECK( (*g_nvFunctions.nvEncUnmapInputResource)( encoder, inputBuffer.inputResource.mappedResource ), "Failed unmapping input buffer" );
+   CHECK( (*g_nvFunctions.nvEncUnregisterResource)( encoder, inputBuffer.registerResource.registeredResource ), "Failed unmapping input buffer" );
    //cuMemFree( inputBuffer.cudaBuffer );
 }
 void UnlockAlphaBuffer( void * encoder, MyNvBuffer & alphaBuffer )
 {
    // Unmap the alpha
-   CHECK( NvEncUnmapInputResource( encoder, alphaBuffer.inputResource.mappedResource ), "Failed unmapping alpha buffer" );
+   CHECK( (*g_nvFunctions.nvEncUnmapInputResource)( encoder, alphaBuffer.inputResource.mappedResource ), "Failed unmapping alpha buffer" );
 }
 void UnlockOutputBuffer( void * encoder, void * outputBuffer )
 {
-   CHECK( NvEncDestroyBitstreamBuffer( encoder, outputBuffer ), "Failed to destroy bitstream buffer" );
+   CHECK( (*g_nvFunctions.nvEncDestroyBitstreamBuffer)( encoder, outputBuffer ), "Failed to destroy bitstream buffer" );
 }
 int main( int argc, char *argv[] )
 {
@@ -347,7 +349,7 @@ int main( int argc, char *argv[] )
       {
          if ( nvEncoder )
          {
-            NvEncDestroyEncoder( nvEncoder );
+            (*g_nvFunctions.nvEncDestroyEncoder)( nvEncoder );
             nvEncoder = nullptr;
          }
          if ( outFile.good() )
@@ -362,9 +364,8 @@ int main( int argc, char *argv[] )
    
    try
    {
-      // TODO: may not need some or any of these
-      //dlopen( "libnvidia-encode.so" );
-      //CHECK( NvEncodeAPICreateInstance(NV_ENCODE_API_FUNCTION_LIST *functionList) );
+      // Get the functions as they are not explicitely dynamic in the shared objectc
+      CHECK( NvEncodeAPICreateInstance( &g_nvFunctions ), "Failed getting NVidia encode functions" );
       
       // TODO: Create a CUDA context
       void * cudaContext = nullptr; // SHOULD BE CUDA CONTEXT
@@ -376,17 +377,17 @@ int main( int argc, char *argv[] )
          0,
          NVENCAPI_VERSION,
          0,
-         NULL
+         0
       };
-      CHECK( NvEncOpenEncodeSessionEx( &sessionParams,
+      CHECK( (*g_nvFunctions.nvEncOpenEncodeSessionEx)( &sessionParams,
          &raii.nvEncoder), "Failed initializing NVidia encode session" );
 
       // Ensure we have support for the desired encoder
       uint32_t numEncoderGuids = 0;
       bool hasHevcSupport = false;
-      CHECK( NvEncGetEncodeGUIDCount( raii.nvEncoder, &numEncoderGuids ), "Failed getting NVidia encode GUID count" );
+      CHECK( (*g_nvFunctions.nvEncGetEncodeGUIDCount)( raii.nvEncoder, &numEncoderGuids ), "Failed getting NVidia encode GUID count" );
       std::vector< GUID > guids( numEncoderGuids );
-      CHECK( NvEncGetEncodeGUIDs( raii.nvEncoder,
+      CHECK( (*g_nvFunctions.nvEncGetEncodeGUIDs)( raii.nvEncoder,
          guids.data(),
          numEncoderGuids,
          &numEncoderGuids ), "Failed getting NVidia encode GUIDs" );
@@ -404,9 +405,9 @@ int main( int argc, char *argv[] )
       // Ensure we have support for the desired profile
       uint32_t numProfileGuids = 0;
       bool hasProfileSupport = false;
-      CHECK( NvEncGetEncodeProfileGUIDCount( raii.nvEncoder, g_encoderGuid, &numProfileGuids ), "Failed getting NVidia encode profile GUID count" );
+      CHECK( (*g_nvFunctions.nvEncGetEncodeProfileGUIDCount)( raii.nvEncoder, g_encoderGuid, &numProfileGuids ), "Failed getting NVidia encode profile GUID count" );
       guids = std::vector< GUID >( numEncoderGuids );
-      CHECK( NvEncGetEncodeProfileGUIDs( raii.nvEncoder,
+      CHECK( (*g_nvFunctions.nvEncGetEncodeProfileGUIDs)( raii.nvEncoder,
          g_encoderGuid,
          guids.data(),
          numProfileGuids,
@@ -442,12 +443,12 @@ int main( int argc, char *argv[] )
       initParams.encodeConfig = &initParamsHevc;
     
       // Initialize the encoder
-      CHECK( NvEncInitializeEncoder( raii.nvEncoder, &initParams ), "Failed initializing NVidia encoder" );
+      CHECK( (*g_nvFunctions.nvEncInitializeEncoder)( raii.nvEncoder, &initParams ), "Failed initializing NVidia encoder" );
    }
    catch ( const std::runtime_error & e )
    {
       std::cout << e.what() << std::endl;
-      return;
+      return 1;
    }
    
    // Create the output file
@@ -471,13 +472,13 @@ int main( int argc, char *argv[] )
          inputBuffer.picParams.outputBitstream = outputBuffer;
          
          // Encode a frame
-         CHECK( NvEncEncodePicture( raii.nvEncoder, &inputBuffer.picParams ), "Failed to encode frame" );
+         CHECK( (*g_nvFunctions.nvEncEncodePicture)( raii.nvEncoder, &inputBuffer.picParams ), "Failed to encode frame" );
 
          // Lock output buffer, append to file, unlock
          NV_ENC_LOCK_BITSTREAM outBitstream = { NV_ENC_LOCK_BITSTREAM_VER, .outputBitstream = outputBuffer };
-         CHECK( NvEncLockBitstream( raii.nvEncoder, &outBitstream ), "Failed locking the output bitstream" );
+         CHECK( (*g_nvFunctions.nvEncLockBitstream)( raii.nvEncoder, &outBitstream ), "Failed locking the output bitstream" );
          raii.outFile.write( (char *)outBitstream.bitstreamBufferPtr, outBitstream.bitstreamSizeInBytes );
-         CHECK( NvEncUnlockBitstream( raii.nvEncoder, outBitstream.outputBitstream ), "Failed unlocking the output bitstream" );
+         CHECK( (*g_nvFunctions.nvEncUnlockBitstream)( raii.nvEncoder, outBitstream.outputBitstream ), "Failed unlocking the output bitstream" );
          
          // Unlock all buffers
          UnlockOutputBuffer( raii.nvEncoder, outputBuffer );
