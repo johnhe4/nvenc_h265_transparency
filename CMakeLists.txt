@@ -38,16 +38,10 @@ set( CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DDEBUG" )
 
 include( CheckIncludeFile )
 
-# Make sure we have the nvEncodeApi
-CHECK_INCLUDE_FILE( nvEncodeAPI.h NV_ENC_INSTALLED )
-if ( NOT NV_ENC_INSTALLED )
-   MESSAGE( FATAL_ERROR "Could not find nvEncodeAPI.h" )
-endif()
-
 # Use CLI11 for argument parsing
 find_package( CLI11 REQUIRED )
 
-add_executable( nvenc_h265_transparency main.cpp utility.hpp )
+add_executable( nvenc_h265_transparency main.cpp utility.hpp nvEncodeAPI.h )
 
 # Link local stuff first, then system stuff
 

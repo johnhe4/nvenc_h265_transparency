@@ -40,18 +40,18 @@ Now convert the video to a raw sequence of YUV 4:2:0 frames, all packed into one
 This file will be uncompressed so a large number of frames will take a lot of space.
 FFmpeg is the usual choice for this:
 
-`ffmpeg -i video.mp4 -c:v rawvideo -pix_fmt nv12 video.nv12`
+`ffmpeg -i video.mp4 -c:v rawvideo -pix_fmt nv12 video.yuv`
 
 ### Convert mask to raw bytes
 We'll use our `image.jpg` for a transparency mask. This mask must be a grayscale image where a bright value represents more opacity, and dark value represents more transparency.
 For this test you can use any grayscale image, but it MUST have the same dimensions as the video:
 
-`ffmpeg -i image.jpg -pix_fmt nv12 image.nv12`
+`ffmpeg -i image.jpg -pix_fmt nv12 image.yuv`
 
 ## Create an h.265 video with transparency
 Run the app:
 
-`./nvenc_h265_transparency --yuvFrames <yuv file you created> --height <height> --width <width> --numFrames <number of frames> --fpsn <fps numerator> --fpsd <fps denominator> --mask <mask img>`
+`./nvenc_h265_transparency --yuvFrames video.yuv --width <width> --height <height> --numFrames <number of frames> --fpsn <fps numerator> --fpsd <fps denominator> --mask image.yuv`
 
 ## Finalize output data
 This will generate a single `.h265` file in the current directory (`video.h265` in this example). 

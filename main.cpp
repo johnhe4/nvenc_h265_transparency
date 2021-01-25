@@ -11,23 +11,31 @@
 #include "nvEncodeAPI.h"
 
 // Error handling
-inline void ThrowErorr( int code, std::string errorMsg )
+inline void ThrowNveErorr( int code, std::string errorMsg )
 {
    std::stringstream ss;
    ss << errorMsg << ": " << code;
    throw std::runtime_error( ss.str() );
 }
-#define CHECK( code, errorMsg ) if ( code != NV_ENC_SUCCESS ) ThrowErorr( code, errorMsg );
+#define NVE_CHECK( code, errorMsg ) if ( code != NV_ENC_SUCCESS ) ThrowNveErorr( code, errorMsg );
+inline void ThrowCudaErorr( CUresult code )
+{
+   char * errorMsg = nullptr;
+   cuGetErrorName( code, (const char **)&errorMsg );
+   throw std::runtime_error( errorMsg );
+}
+#define CUDA_CHECK( code ) if ( code != CUDA_SUCCESS ) ThrowCudaErorr( code );
 
 // Globals
 static const GUID g_encoderGuid = NV_ENC_CODEC_HEVC_GUID;
 static const GUID g_profileGuid = NV_ENC_HEVC_PROFILE_MAIN_GUID;
-static const NV_ENC_BUFFER_FORMAT g_inputFormat = NV_ENC_BUFFER_FORMAT_NV12;
-static const bool g_externalAlloc = false; // Cannot be true for transparency
+constexpr NV_ENC_BUFFER_FORMAT g_inputFormat = NV_ENC_BUFFER_FORMAT_NV12;
+constexpr bool g_externalAlloc = false; // Cannot be true for transparency
 static const std::unordered_map< NV_ENC_CAPS, int > g_requiredCaps = {
    // Put caps and expected values here as {key,val} pairs
    { NV_ENC_CAPS_SUPPORT_ALPHA_LAYER_ENCODING, 1 }
 };
+constexpr int CUDA_DEVICE_INDEX = 0;
 NV_ENCODE_API_FUNCTION_LIST g_nvFunctions = { NV_ENCODE_API_FUNCTION_LIST_VER };
 
 struct MyNvBuffer
@@ -38,8 +46,6 @@ struct MyNvBuffer
    NV_ENC_PIC_PARAMS picParams;
    void * cudaBuffer = nullptr;
 };
-//static std::unordered_map< void *, MyNvBuffer > g_inputBuffers;
-//static std::unordered_map< void *, MyNvBuffer > g_outputBuffers;
 
 struct Args
 {
@@ -156,7 +162,7 @@ MyNvBuffer LockInputBuffer( void * encoder,
       NV_ENC_INPUT_IMAGE,
       0
    };
-   CHECK( (*g_nvFunctions.nvEncRegisterResource)( encoder, &returnValue.registerResource ), "Failed registering CUDA buffer with encode session" );
+   NVE_CHECK( (*g_nvFunctions.nvEncRegisterResource)( encoder, &returnValue.registerResource ), "Failed registering CUDA buffer with encode session" );
    
    // Map as an input buffer
    returnValue.inputResource = {
@@ -166,7 +172,7 @@ MyNvBuffer LockInputBuffer( void * encoder,
       nullptr, NV_ENC_BUFFER_FORMAT_UNDEFINED, // These will be populated after the call to NvEncMapInputResource()
       0
    };
-   CHECK( (*g_nvFunctions.nvEncMapInputResource)( encoder, &returnValue.inputResource ), "Failed mapping CUDA buffer as encoder input" );
+   NVE_CHECK( (*g_nvFunctions.nvEncMapInputResource)( encoder, &returnValue.inputResource ), "Failed mapping CUDA buffer as encoder input" );
    
    // Create the image wrapper around this buffer
    returnValue.picParams = {
@@ -223,7 +229,7 @@ MyNvBuffer LockAlphaBuffer( void * encoder, const MyNvBuffer & inputBuffer )
          NV_ENC_INPUT_IMAGE,
          0
       };
-      CHECK( (*g_nvFunctions.nvEncRegisterResource)( encoder, &returnValue->registerResource ), "Failed registering CUDA buffer with encode session" );
+      NVE_CHECK( (*g_nvFunctions.nvEncRegisterResource)( encoder, &returnValue->registerResource ), "Failed registering CUDA buffer with encode session" );
    }
    
    // Map as an input buffer
@@ -234,7 +240,7 @@ MyNvBuffer LockAlphaBuffer( void * encoder, const MyNvBuffer & inputBuffer )
       nullptr, NV_ENC_BUFFER_FORMAT_UNDEFINED, // These will be populated after the call to NvEncMapInputResource()
       0
    };
-   CHECK( (*g_nvFunctions.nvEncMapInputResource)( encoder, &returnValue->inputResource ), "Failed mapping CUDA buffer as encoder input" );
+   NVE_CHECK( (*g_nvFunctions.nvEncMapInputResource)( encoder, &returnValue->inputResource ), "Failed mapping CUDA buffer as encoder input" );
    
    // Create the image wrapper around this buffer
    returnValue->picParams = {
@@ -275,7 +281,7 @@ void * LockOutputBuffer( void * encoder,
          NV_ENC_OUTPUT_BITSTREAM,
          0
       };
-      CHECK( (*g_nvFunctions.nvEncRegisterResource)( encoder, &nvBuffer.registerResource ), "Failed registering CUDA buffer with encode session" );
+      NVE_CHECK( (*g_nvFunctions.nvEncRegisterResource)( encoder, &nvBuffer.registerResource ), "Failed registering CUDA buffer with encode session" );
       
       // Map as an input buffer
       nvBuffer.inputResource = {
@@ -285,14 +291,14 @@ void * LockOutputBuffer( void * encoder,
          nullptr, NV_ENC_BUFFER_FORMAT_UNDEFINED, // These will be populated after the call to NvEncMapInputResource()
          0
       };
-      CHECK( (*g_nvFunctions.nvEncMapInputResource)( encoder, &nvBuffer.inputResource ), "Failed mapping CUDA buffer as encoder input" );
+      NVE_CHECK( (*g_nvFunctions.nvEncMapInputResource)( encoder, &nvBuffer.inputResource ), "Failed mapping CUDA buffer as encoder input" );
       
       returnValue = nvBuffer.inputResource.mappedResource;
    }
    else
    {
       nvBuffer.outputBuffer = { NV_ENC_CREATE_BITSTREAM_BUFFER_VER };
-      CHECK( (*g_nvFunctions.nvEncCreateBitstreamBuffer)( encoder, &nvBuffer.outputBuffer ), "Failed creating output bitstream buffer" );
+      NVE_CHECK( (*g_nvFunctions.nvEncCreateBitstreamBuffer)( encoder, &nvBuffer.outputBuffer ), "Failed creating output bitstream buffer" );
       
       returnValue = nvBuffer.outputBuffer.bitstreamBuffer;
    }
@@ -306,18 +312,18 @@ void UnlockInputBuffer( void * encoder,
    MyNvBuffer & inputBuffer )
 {
    // Completely destroy the input
-   CHECK( (*g_nvFunctions.nvEncUnmapInputResource)( encoder, inputBuffer.inputResource.mappedResource ), "Failed unmapping input buffer" );
-   CHECK( (*g_nvFunctions.nvEncUnregisterResource)( encoder, inputBuffer.registerResource.registeredResource ), "Failed unmapping input buffer" );
+   NVE_CHECK( (*g_nvFunctions.nvEncUnmapInputResource)( encoder, inputBuffer.inputResource.mappedResource ), "Failed unmapping input buffer" );
+   NVE_CHECK( (*g_nvFunctions.nvEncUnregisterResource)( encoder, inputBuffer.registerResource.registeredResource ), "Failed unmapping input buffer" );
    //cuMemFree( inputBuffer.cudaBuffer );
 }
 void UnlockAlphaBuffer( void * encoder, MyNvBuffer & alphaBuffer )
 {
    // Unmap the alpha
-   CHECK( (*g_nvFunctions.nvEncUnmapInputResource)( encoder, alphaBuffer.inputResource.mappedResource ), "Failed unmapping alpha buffer" );
+   NVE_CHECK( (*g_nvFunctions.nvEncUnmapInputResource)( encoder, alphaBuffer.inputResource.mappedResource ), "Failed unmapping alpha buffer" );
 }
 void UnlockOutputBuffer( void * encoder, void * outputBuffer )
 {
-   CHECK( (*g_nvFunctions.nvEncDestroyBitstreamBuffer)( encoder, outputBuffer ), "Failed to destroy bitstream buffer" );
+   NVE_CHECK( (*g_nvFunctions.nvEncDestroyBitstreamBuffer)( encoder, outputBuffer ), "Failed to destroy bitstream buffer" );
 }
 int main( int argc, char *argv[] )
 {
@@ -329,8 +335,8 @@ int main( int argc, char *argv[] )
    app.add_option( "--width", args.width, "Width of the input YUV frames and mask\n" )->required();
    app.add_option( "--height", args.height, "Height of the input YUV frames and mask\n" )->required();
    app.add_option( "--numFrames", args.numFrames, "Number of frames to output. Must be less than number of frames in the monolithic input file\n" )->required();
-   app.add_option( "--fpsn", args.numFrames, "Frame rate numerator\n" )->required();
-   app.add_option( "--fpsd", args.numFrames, "Frame rate denominator\n" )->required();
+   app.add_option( "--fpsn", args.fpsNumerator, "Frame rate numerator\n" )->required();
+   app.add_option( "--fpsd", args.fpsDenominator, "Frame rate denominator\n" )->required();
    
    try
    {
@@ -352,6 +358,11 @@ int main( int argc, char *argv[] )
             (*g_nvFunctions.nvEncDestroyEncoder)( nvEncoder );
             nvEncoder = nullptr;
          }
+         if ( cudaContext )
+         {
+            cuDevicePrimaryCtxRelease( 1 );
+            cudaContext = nullptr;
+         }
          if ( outFile.good() )
          {
             outFile.close();
@@ -359,35 +370,40 @@ int main( int argc, char *argv[] )
       }
       
       void * nvEncoder = nullptr;
+      void * cudaContext = nullptr;
       std::ofstream outFile;
    } raii;
    
    try
    {
       // Get the functions as they are not explicitely dynamic in the shared objectc
-      CHECK( NvEncodeAPICreateInstance( &g_nvFunctions ), "Failed getting NVidia encode functions" );
+      NVE_CHECK( NvEncodeAPICreateInstance( &g_nvFunctions ), "Failed getting NVidia encode functions" );
       
-      // TODO: Create a CUDA context
-      void * cudaContext = nullptr; // SHOULD BE CUDA CONTEXT
+      // Retain the primary CUDA context
+      CUDA_CHECK( cuInit( 0 ) );
+      CUdevice cudaDevice;
+      CUDA_CHECK( cuDeviceGet( &cudaDevice, CUDA_DEVICE_INDEX ) );
+      CUDA_CHECK( cuCtxCreate( (CUcontext *)&raii.cudaContext, 0, cudaDevice ) );
+      CUDA_CHECK( cuCtxPopCurrent( nullptr ) );
       
       // Initialize the encoder
       NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS sessionParams = { NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER,
          NV_ENC_DEVICE_TYPE_CUDA,
-         cudaContext,
+         raii.cudaContext,
          0,
          NVENCAPI_VERSION,
          0,
          0
       };
-      CHECK( (*g_nvFunctions.nvEncOpenEncodeSessionEx)( &sessionParams,
+      NVE_CHECK( (*g_nvFunctions.nvEncOpenEncodeSessionEx)( &sessionParams,
          &raii.nvEncoder), "Failed initializing NVidia encode session" );
 
       // Ensure we have support for the desired encoder
       uint32_t numEncoderGuids = 0;
       bool hasHevcSupport = false;
-      CHECK( (*g_nvFunctions.nvEncGetEncodeGUIDCount)( raii.nvEncoder, &numEncoderGuids ), "Failed getting NVidia encode GUID count" );
+      NVE_CHECK( (*g_nvFunctions.nvEncGetEncodeGUIDCount)( raii.nvEncoder, &numEncoderGuids ), "Failed getting NVidia encode GUID count" );
       std::vector< GUID > guids( numEncoderGuids );
-      CHECK( (*g_nvFunctions.nvEncGetEncodeGUIDs)( raii.nvEncoder,
+      NVE_CHECK( (*g_nvFunctions.nvEncGetEncodeGUIDs)( raii.nvEncoder,
          guids.data(),
          numEncoderGuids,
          &numEncoderGuids ), "Failed getting NVidia encode GUIDs" );
@@ -405,9 +421,9 @@ int main( int argc, char *argv[] )
       // Ensure we have support for the desired profile
       uint32_t numProfileGuids = 0;
       bool hasProfileSupport = false;
-      CHECK( (*g_nvFunctions.nvEncGetEncodeProfileGUIDCount)( raii.nvEncoder, g_encoderGuid, &numProfileGuids ), "Failed getting NVidia encode profile GUID count" );
+      NVE_CHECK( (*g_nvFunctions.nvEncGetEncodeProfileGUIDCount)( raii.nvEncoder, g_encoderGuid, &numProfileGuids ), "Failed getting NVidia encode profile GUID count" );
       guids = std::vector< GUID >( numEncoderGuids );
-      CHECK( (*g_nvFunctions.nvEncGetEncodeProfileGUIDs)( raii.nvEncoder,
+      NVE_CHECK( (*g_nvFunctions.nvEncGetEncodeProfileGUIDs)( raii.nvEncoder,
          g_encoderGuid,
          guids.data(),
          numProfileGuids,
@@ -443,7 +459,7 @@ int main( int argc, char *argv[] )
       initParams.encodeConfig = &initParamsHevc;
     
       // Initialize the encoder
-      CHECK( (*g_nvFunctions.nvEncInitializeEncoder)( raii.nvEncoder, &initParams ), "Failed initializing NVidia encoder" );
+      NVE_CHECK( (*g_nvFunctions.nvEncInitializeEncoder)( raii.nvEncoder, &initParams ), "Failed initializing NVidia encoder" );
    }
    catch ( const std::runtime_error & e )
    {
@@ -472,13 +488,13 @@ int main( int argc, char *argv[] )
          inputBuffer.picParams.outputBitstream = outputBuffer;
          
          // Encode a frame
-         CHECK( (*g_nvFunctions.nvEncEncodePicture)( raii.nvEncoder, &inputBuffer.picParams ), "Failed to encode frame" );
+         NVE_CHECK( (*g_nvFunctions.nvEncEncodePicture)( raii.nvEncoder, &inputBuffer.picParams ), "Failed to encode frame" );
 
          // Lock output buffer, append to file, unlock
          NV_ENC_LOCK_BITSTREAM outBitstream = { NV_ENC_LOCK_BITSTREAM_VER, .outputBitstream = outputBuffer };
-         CHECK( (*g_nvFunctions.nvEncLockBitstream)( raii.nvEncoder, &outBitstream ), "Failed locking the output bitstream" );
+         NVE_CHECK( (*g_nvFunctions.nvEncLockBitstream)( raii.nvEncoder, &outBitstream ), "Failed locking the output bitstream" );
          raii.outFile.write( (char *)outBitstream.bitstreamBufferPtr, outBitstream.bitstreamSizeInBytes );
-         CHECK( (*g_nvFunctions.nvEncUnlockBitstream)( raii.nvEncoder, outBitstream.outputBitstream ), "Failed unlocking the output bitstream" );
+         NVE_CHECK( (*g_nvFunctions.nvEncUnlockBitstream)( raii.nvEncoder, outBitstream.outputBitstream ), "Failed unlocking the output bitstream" );
          
          // Unlock all buffers
          UnlockOutputBuffer( raii.nvEncoder, outputBuffer );
