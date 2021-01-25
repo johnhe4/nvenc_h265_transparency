@@ -99,12 +99,11 @@ NV_ENC_INITIALIZE_PARAMS CreateInitParams( void * encoder,
       uint32_t(width), uint32_t(height),                // Aspect ratio dimensions
       uint32_t(fpsNumerator), uint32_t(fpsDenominator), // Frame rate as a ratio
       0,                                                // Asynchronous=1, Synchronous=0
-      1,                                                // input buffers in display order=1, encode order=0
-      0                                                 // Zero everything here and beyond
+      1                                                 // input buffers in display order=1, encode order=0
    };
    
-   // We'll provide our own output buffer, thank you
-   returnValue.enableOutputInVidmem = 1;
+   // Uncomment this to provide your own output buffer. This is not supported with transparency
+   //returnValue.enableOutputInVidmem = 1;
    
    // Uncomment this to help lower latency. This is not supported with transparency
    //returnValue.enableSubFrameWrite = 1;
@@ -456,10 +455,12 @@ int main( int argc, char *argv[] )
          
       // Codec-specific settings
       NV_ENC_CONFIG initParamsHevc = CreateInitParamsHevc();
-      initParams.encodeConfig = &initParamsHevc;
+      //initParams.encodeConfig = &initParamsHevc;
     
       // Initialize the encoder
       NVE_CHECK( (*g_nvFunctions.nvEncInitializeEncoder)( raii.nvEncoder, &initParams ), "Failed initializing NVidia encoder" );
+
+      int x = 9;
    }
    catch ( const std::runtime_error & e )
    {

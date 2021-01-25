@@ -58,8 +58,7 @@ This will generate a single `.h265` file in the current directory (`video.h265` 
 This file will not play in standard players; it must first be packed into a container such as mp4.
 Again, FFmpeg to the rescue:
 
-TODO, incomplete
-`ffmpeg -f video.h265 -pix_fmt nv12 -s:v <width>x<height> -r 25 -i input.nv12 -c:v libx264 output.mp4`
+`ffmpeg -i video.h265 -c copy finalVideo.mp4`
 
 Enjoy!
 -John
