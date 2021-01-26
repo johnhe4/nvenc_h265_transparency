@@ -36,13 +36,18 @@ include_directories( ${CMAKE_REQUIRED_INCLUDES} )
 set( CMAKE_CXX_STANDARD 14 )
 set( CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DDEBUG" )
 
+# CUDA settings
+set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-gencode arch=compute_50,code=\"sm_50,compute_50\" )
+
 include( CheckIncludeFile )
 
 # Use CLI11 for argument parsing
 find_package( CLI11 REQUIRED )
 
+# NVidia Video Encode libs, installed with the graphics driver
+find_library( CUVID_LIB nvcuvid )
+find_library( NVENCODEAPI_LIB nvidia-encode )
+
 add_executable( nvenc_h265_transparency main.cpp utility.hpp nvEncodeAPI.h )
 
-# Link local stuff first, then system stuff
-
-target_link_libraries( nvenc_h265_transparency nvidia-encode nvcuvid cuda )
+target_link_libraries( nvenc_h265_transparency ${CUDA_CUDA_LIBRARY} ${NVENCODEAPI_LIB} ${CUVID_LIB} )

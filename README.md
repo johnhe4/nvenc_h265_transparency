@@ -27,10 +27,6 @@ There are many ways to determine this, ffprobe is one way:
 
 `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 video.mp4`
 
-Get the number of frames. You can process less than this number but not more:
-
-`ffprobe -v error -select_streams v:0 -show_entries stream=nb_frames -of csv=s=x:p=0 video.mp4`
-
 Get the frame rate (fps) as a ratio (numerator and denominator):
 
 `ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=s=x:p=0 video.mp4`
