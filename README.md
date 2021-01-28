@@ -1,11 +1,18 @@
 # nvenc_h265_transparency
-Encodes a sequence of YUV frames into HEVC (h.265) with transparency, using Nvidia's nvEncodeApi
+Encodes a sequence of YUV frames into HEVC (h.265) with transparency using NVIDIA's [Video Codec SDK](https://developer.nvidia.com/nvidia-video-codec-SDK)
 
 ## Dependencies
-- Nvidia's [Video Codec SDK](https://developer.nvidia.com/nvidia-video-codec-SDK). This requires a Nvidia developer account and manual install of headers and libs
+*REQUIRED:*
+- C++ compiler. I test on g++ but try to keep things cross-platform.
 - [cmake](https://cmake.org) 3.14 or later
 - [CLI11](https://github.com/CLIUtils/CLI11)
-- Nvidia graphics card
+- NVIDIA graphics card with [encode capability](https://developer.nvidia.com/video-encode-and-decode-gpu-support-matrix-new)
+- NVIDIA graphics driver installed, functioning and recent
+- NVIDIA [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit), functioning and recent
+
+*HELPFUL:*
+ - [FFmpeg](https://ffmpeg.org) for preparing input data and packaging output data. My code has no dependencies on FFmpeg.
+ - An image editor for creating the transparency mask. I used [gimp](https://www.gimp.org).
 
 ## Getting started
 This is a command line program that uses cmake to build
@@ -16,6 +23,7 @@ cd nvenc_h265_transparency
 mkdir build
 cd build
 cmake ..
+make
 ```
 
 ## Prepare input data
@@ -45,16 +53,19 @@ For this test you can use any grayscale image, but it MUST have the same dimensi
 `ffmpeg -i image.jpg -pix_fmt nv12 image.yuv`
 
 ## Create an h.265 video with transparency
-Run the app:
+Now it's time to run the code you built earlier:
 
-`./nvenc_h265_transparency --yuvFrames video.yuv --width <width> --height <height> --numFrames <number of frames> --fpsn <fps numerator> --fpsd <fps denominator> --mask image.yuv`
+`./nvenc_h265_transparency --yuvFrames video.yuv --width <width> --height <height> --fpsn <fps numerator> --fpsd <fps denominator> --mask image.yuv`
+
+It doesn't have anything fancy for output, so unless you see errors you can wait for it to complete.
 
 ## Finalize output data
-This will generate a single `.h265` file in the current directory (`video.h265` in this example). 
+This will generate a single `.h265` file in the current directory. 
 This file will not play in standard players; it must first be packed into a container such as mp4.
 Again, FFmpeg to the rescue:
 
 `ffmpeg -i video.h265 -c copy finalVideo.mp4`
 
 Enjoy!
+
 -John
