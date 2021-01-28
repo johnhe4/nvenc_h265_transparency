@@ -25,6 +25,13 @@ inline void ThrowCudaErorr( CUresult code )
    throw std::runtime_error( errorMsg );
 }
 #define CUDA_CHECK( code ) if ( code != CUDA_SUCCESS ) ThrowCudaErorr( code );
+struct CudaScope
+{
+   CudaScope( CUcontext cudaContext ) : _cudaContext(cudaContext) { if(_cudaContext) CUDA_CHECK(cuCtxPushCurrent(_cudaContext)); }
+   ~CudaScope() { if ( _cudaContext ) CUDA_CHECK(cuCtxPopCurrent(nullptr)); }
+private:
+   CUcontext _cudaContext = nullptr;
+};
 
 // Globals
 struct MyNv
@@ -144,6 +151,7 @@ NV_ENC_CONFIG CreateInitParamsHevc( void * encoder,
    return presetConfig.presetCfg;
 }
 MyNvBuffer LockInputBuffer( void * encoder,
+   void * cudaContext,
    int width,
    int height )
 {
@@ -151,45 +159,55 @@ MyNvBuffer LockInputBuffer( void * encoder,
 
    // Manage file state
    if ( g_file.inputVideo.eof() )
-      throw std::runtime_error( "Reached the end of the input video" );
+   {
+      // We reached the end of data last time we were here,
+      // so set to null and exit
+      returnValue.inputResource.mappedResource = nullptr;
+      return returnValue;
+   }
    else if ( !g_file.inputVideo.is_open() )
    {
+      // Must be the first time here, open and ensure our input video file is good
       g_file.inputVideo.open( args.inputYuvFramesFilename );
       if ( !g_file.inputVideo.good() )
          throw std::runtime_error( "Could not load input video file" );
    }
 
    // TODO: THIS ASSUMES NV12
-   height = height * 3 / 2;
+   uint32_t byteHeight = height * 3 / 2;
 
    // Create a device buffer first so we have pitch
-   size_t cudaWidth = width, cudaHeight = height, cudaPitch;
-   CUDA_CHECK( cuMemAllocPitch( (CUdeviceptr *)&returnValue.cudaBuffer,
-      &cudaPitch,
-      cudaWidth,
-      cudaHeight,
-      8 ) );   
+   size_t cudaPitch;
+   {
+      CudaScope cs( (CUcontext)cudaContext );
 
-   // Create a pinned host buffer with proper alignment for CUDA   
-   char * tempBuffer = nullptr;
-   CUDA_CHECK( cuMemHostAlloc( (void **)&tempBuffer, cudaHeight * cudaPitch, 0 ) );
+      CUDA_CHECK( cuMemAllocPitch( (CUdeviceptr *)&returnValue.cudaBuffer,
+         &cudaPitch,
+         width,
+         byteHeight,
+         8 ) );   
 
-   // Read the next frame from disk to our temp buffer
-   for( int row = 0; row < height; ++row )
-      g_file.inputVideo.read( tempBuffer + (row * cudaPitch), width );
+      // Create a pinned host buffer with proper alignment for CUDA   
+      char * tempBuffer = nullptr;
+      CUDA_CHECK( cuMemHostAlloc( (void **)&tempBuffer, byteHeight * cudaPitch, 0 ) );
 
-   // Transport from pinned host buffer to device buffer
-   CUDA_CHECK( cuMemcpyHtoD( (CUdeviceptr)returnValue.cudaBuffer, tempBuffer, cudaHeight * cudaPitch ) );
+      // Read the next frame from disk to our temp buffer
+      for( int row = 0; row < byteHeight; ++row )
+         g_file.inputVideo.read( tempBuffer + (row * cudaPitch), width );
 
-   // Delete our temp buffer
-   cuMemFreeHost( tempBuffer );
+      // Transport from pinned host buffer to device buffer
+      CUDA_CHECK( cuMemcpyHtoD( (CUdeviceptr)returnValue.cudaBuffer, tempBuffer, byteHeight * cudaPitch ) );
+
+      // Delete our temp buffer
+      cuMemFreeHost( tempBuffer );
+   }
    
    // Register the CUDA buffer with the encode session
    returnValue.registerResource = {
       NV_ENC_REGISTER_RESOURCE_VER,
       NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR,
-      uint32_t(cudaWidth),
-      uint32_t(cudaHeight),
+      uint32_t(width),
+      uint32_t(height),
       uint32_t(cudaPitch),
       0,
       returnValue.cudaBuffer,
@@ -211,7 +229,7 @@ MyNvBuffer LockInputBuffer( void * encoder,
    // Create the image wrapper around this buffer
    returnValue.picParams = {
       NV_ENC_PIC_PARAMS_VER,
-      uint32_t(cudaWidth), uint32_t(cudaHeight), uint32_t(cudaPitch)
+      uint32_t(width), uint32_t(height), uint32_t(cudaPitch)
    };
    
    returnValue.picParams.inputBuffer = returnValue.inputResource.mappedResource;
@@ -223,38 +241,58 @@ MyNvBuffer LockInputBuffer( void * encoder,
    
    return returnValue;
 }
-MyNvBuffer LockAlphaBuffer( void * encoder, const MyNvBuffer & inputBuffer )
+MyNvBuffer LockAlphaBuffer( void * encoder,
+   void * cudaContext,
+   const MyNvBuffer & inputBuffer )
 {
    // We're using an image for a mask, so only do this once
    static std::shared_ptr< MyNvBuffer > returnValue = nullptr;
    if ( returnValue == nullptr )
    {
-      returnValue = std::make_shared< MyNvBuffer >();
-      
-      // Create a CUDA buffer
-      size_t cudaWidth = inputBuffer.registerResource.width;
-      size_t cudaHeight = inputBuffer.registerResource.height;
-      size_t cudaPitch;
-   //   if ( CUDA_SUCCESS != cuMemAllocPitch( (CUdevicptr **)returnValue->cudaBuffer,
-   //      &cudaPitch,
-   //       cudaWidth,
-   //       cudaHeight,
-   //       8 ) )
-   //      throw std::runtime_error( "Could not allocate CUDA output buffer" );
-
-      // TODO: Read the data
+      std::shared_ptr< MyNvBuffer > newBuffer = std::make_shared< MyNvBuffer >();
    
-      // Memset chroma to 0x80 per the docs
-//      cuMemsetD8( (CUdevicptr *)returnValue->cudaBuffer,
-//         0x80,
-//         cudaPitch * cudaHeight );
+      // TODO: THIS ASSUMES NV12
+      uint32_t byteHeight = inputBuffer.registerResource.height * 3 / 2;
+
+      // Create a device buffer first so we have pitch
+      size_t cudaPitch;
+      {
+         CudaScope cs( (CUcontext)cudaContext );
+
+         CUDA_CHECK( cuMemAllocPitch( (CUdeviceptr *)&newBuffer->cudaBuffer,
+            &cudaPitch,
+            inputBuffer.registerResource.width,
+            byteHeight,
+            8 ) );   
+
+         // Create a pinned host buffer with proper alignment for CUDA   
+         char * tempBuffer = nullptr;
+         CUDA_CHECK( cuMemHostAlloc( (void **)&tempBuffer, byteHeight * cudaPitch, 0 ) );
+
+         // Read the frame from disk to our temp buffer
+         for( int row = 0; row < byteHeight; ++row )
+            g_file.inputVideo.read( tempBuffer + (row * cudaPitch), inputBuffer.registerResource.width );
+
+         // Memset chroma to 0x80 per the docs
+         memset( tempBuffer + (inputBuffer.registerResource.height * cudaPitch),
+            0x80,
+            inputBuffer.registerResource.height * cudaPitch / 2 );
+
+         // Transport from pinned host buffer to device buffer
+         CUDA_CHECK( cuMemcpyHtoD( (CUdeviceptr)newBuffer->cudaBuffer, tempBuffer, byteHeight * cudaPitch ) );
+
+         // Delete our temp buffer
+         cuMemFreeHost( tempBuffer );
+
+         returnValue = newBuffer;
+      }
    
       // Register the CUDA buffer with the encode session
       returnValue->registerResource = {
          NV_ENC_REGISTER_RESOURCE_VER,
          NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR,
-         uint32_t(cudaWidth),
-         uint32_t(cudaHeight),
+         uint32_t(inputBuffer.registerResource.width),
+         uint32_t(inputBuffer.registerResource.height),
          uint32_t(cudaPitch),
          0,
          returnValue->cudaBuffer,
@@ -337,22 +375,25 @@ void * LockOutputBuffer( void * encoder,
       returnValue = nvBuffer.outputBuffer.bitstreamBuffer;
    }
    
-   // Maintain an association between this buffer and NvResource
-   //g_nv.outputBuffers[ returnValue ] = nvBuffer;
-   
    return returnValue;
 }
 void UnlockInputBuffer( void * encoder,
+   void * cudaContext,
    MyNvBuffer & inputBuffer )
 {
    // Completely destroy the input
    NVE_CHECK( (*g_nv.functions.nvEncUnmapInputResource)( encoder, inputBuffer.inputResource.mappedResource ), "Failed unmapping input buffer" );
    NVE_CHECK( (*g_nv.functions.nvEncUnregisterResource)( encoder, inputBuffer.registerResource.registeredResource ), "Failed unmapping input buffer" );
-   //cuMemFree( inputBuffer.cudaBuffer );
+   {
+      CudaScope cs( (CUcontext)cudaContext );
+      CUDA_CHECK( cuMemFree( (CUdeviceptr)inputBuffer.cudaBuffer ) );
+   }
 }
-void UnlockAlphaBuffer( void * encoder, MyNvBuffer & alphaBuffer )
+void UnlockAlphaBuffer( void * encoder,
+   void * cudaContext,
+   MyNvBuffer & alphaBuffer )
 {
-   // Unmap the alpha
+   // Unmap the alpha, but don't delete it
    NVE_CHECK( (*g_nv.functions.nvEncUnmapInputResource)( encoder, alphaBuffer.inputResource.mappedResource ), "Failed unmapping alpha buffer" );
 }
 void UnlockOutputBuffer( void * encoder, void * outputBuffer )
@@ -393,7 +434,7 @@ int main( int argc, char *argv[] )
          }
          if ( cudaContext )
          {
-            cuDevicePrimaryCtxRelease( 1 );
+            cuCtxDestroy( (CUcontext)cudaContext );
             cudaContext = nullptr;
          }
       }
@@ -419,8 +460,7 @@ int main( int argc, char *argv[] )
       CUdevice cudaDevice;
       CUDA_CHECK( cuDeviceGet( &cudaDevice, g_nv.cudaDeviceIndex ) );
       CUDA_CHECK( cuCtxCreate( (CUcontext *)&raii.cudaContext, 0, cudaDevice ) );
-      //CUDA_CHECK( cuCtxPopCurrent( nullptr ) );
-      
+
       // Initialize the encoder
       NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS sessionParams = { NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER,
          NV_ENC_DEVICE_TYPE_CUDA,
@@ -503,19 +543,30 @@ int main( int argc, char *argv[] )
    }
    
    // Create the output file
-   g_file.outputVideo = CreateOutputFile( "outputWithTransparency.nv12" );
+   std::string outputFilename = "outputWithTransparency.h265";
+   g_file.outputVideo = CreateOutputFile( outputFilename );
    
    // For every frame
-   while ( true )
+   int frameCount = 0;
+   bool done = false;
+   while ( !done )
    {
       // Allocate and register an input buffer
       try
       {
          // Lock buffers
-         auto inputBuffer = LockInputBuffer( raii.nvEncoder, args.width, args.height );
-         if ( inputBuffer.inputResource.inputResource == nullptr )
+         auto inputBuffer = LockInputBuffer( raii.nvEncoder,
+            raii.cudaContext,
+            args.width,
+            args.height );
+         if ( inputBuffer.inputResource.mappedResource == nullptr )
+         {
+            done = true;
             break;
-         auto alphaBuffer = LockAlphaBuffer( raii.nvEncoder, inputBuffer );
+         }
+         auto alphaBuffer = LockAlphaBuffer( raii.nvEncoder, 
+            raii.cudaContext,
+            inputBuffer );
          auto outputBuffer = LockOutputBuffer( raii.nvEncoder,
             inputBuffer,
             g_nv.externalAlloc );
@@ -535,8 +586,13 @@ int main( int argc, char *argv[] )
          
          // Unlock all buffers
          UnlockOutputBuffer( raii.nvEncoder, outputBuffer );
-         UnlockAlphaBuffer( raii.nvEncoder, alphaBuffer );
-         UnlockInputBuffer( raii.nvEncoder, inputBuffer );
+         UnlockAlphaBuffer( raii.nvEncoder, raii.cudaContext, alphaBuffer );
+         UnlockInputBuffer( raii.nvEncoder, raii.cudaContext, inputBuffer );
+
+         ++frameCount;
+
+         if ( frameCount == 672 )
+            int x = 9;
       }
       catch ( const std::runtime_error & e )
       {
@@ -544,5 +600,7 @@ int main( int argc, char *argv[] )
       }
    }
    
+   std::cout << "Wrote " << frameCount << " frames to `" << outputFilename << "'" << std::endl;
+
    return 0;
 }
