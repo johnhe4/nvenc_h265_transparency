@@ -33,6 +33,8 @@ private:
    CUcontext _cudaContext = nullptr;
 };
 
+constexpr bool g_useAlpha = true;
+
 // Globals
 struct MyNv
 {
@@ -146,7 +148,7 @@ NV_ENC_CONFIG CreateInitParamsHevc( void * encoder,
 
    // Anything set here will override the preset
    //presetConfig.presetCfg.rcParams = NV_ENC_PARAMS_RC_CBR;
-   presetConfig.presetCfg.encodeCodecConfig.hevcConfig.enableAlphaLayerEncoding = 1;
+   //presetConfig.presetCfg.encodeCodecConfig.hevcConfig.enableAlphaLayerEncoding = 1;
 
    return presetConfig.presetCfg;
 }
@@ -245,6 +247,12 @@ MyNvBuffer LockAlphaBuffer( void * encoder,
    void * cudaContext,
    const MyNvBuffer & inputBuffer )
 {
+   if ( !g_useAlpha )
+   {
+      MyNvBuffer emptyReturn = {};
+      return emptyReturn;
+   }
+
    // We're using an image for a mask, so only do this once
    static std::shared_ptr< MyNvBuffer > returnValue = nullptr;
    if ( returnValue == nullptr )
@@ -393,8 +401,11 @@ void UnlockAlphaBuffer( void * encoder,
    void * cudaContext,
    MyNvBuffer & alphaBuffer )
 {
-   // Unmap the alpha, but don't delete it
-   NVE_CHECK( (*g_nv.functions.nvEncUnmapInputResource)( encoder, alphaBuffer.inputResource.mappedResource ), "Failed unmapping alpha buffer" );
+   if ( alphaBuffer.inputResource.mappedResource != nullptr )
+   {
+      // Unmap the alpha, but don't delete it
+      NVE_CHECK( (*g_nv.functions.nvEncUnmapInputResource)( encoder, alphaBuffer.inputResource.mappedResource ), "Failed unmapping alpha buffer" );
+   }
 }
 void UnlockOutputBuffer( void * encoder, void * outputBuffer )
 {
@@ -567,12 +578,10 @@ int main( int argc, char *argv[] )
          auto alphaBuffer = LockAlphaBuffer( raii.nvEncoder, 
             raii.cudaContext,
             inputBuffer );
+         inputBuffer.picParams.alphaBuffer = alphaBuffer.inputResource.mappedResource;
          auto outputBuffer = LockOutputBuffer( raii.nvEncoder,
             inputBuffer,
             g_nv.externalAlloc );
-         
-         // Tie the data together
-         inputBuffer.picParams.alphaBuffer = alphaBuffer.inputResource.mappedResource;
          inputBuffer.picParams.outputBitstream = outputBuffer;
          
          // Encode a frame
@@ -590,9 +599,6 @@ int main( int argc, char *argv[] )
          UnlockInputBuffer( raii.nvEncoder, raii.cudaContext, inputBuffer );
 
          ++frameCount;
-
-         if ( frameCount == 672 )
-            int x = 9;
       }
       catch ( const std::runtime_error & e )
       {
@@ -600,6 +606,9 @@ int main( int argc, char *argv[] )
       }
    }
    
+   // TODO: Destroy alpha buffer!
+   // TODO: Frame count is 1 off (too high)
+
    std::cout << "Wrote " << frameCount << " frames to `" << outputFilename << "'" << std::endl;
 
    return 0;
