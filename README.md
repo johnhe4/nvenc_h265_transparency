@@ -62,9 +62,9 @@ It doesn't have anything fancy for output, so unless you see errors you can wait
 ## Finalize output data
 This will generate a single `.h265` file in the current directory. 
 This file will not play in standard players; it must first be packed into a container such as mp4.
-Again, FFmpeg to the rescue:
+Again, FFmpeg to the rescue (replace `fpsn` and `fpsd` with appropriate values):
 
-`ffmpeg -i video.h265 -c copy finalVideo.mp4`
+`ffmpeg -i video.h265 -c copy -time_base <fpsn>/<fpsd> <framerate finalVideo.mp4`
 
 Enjoy!
 
