@@ -60,7 +60,7 @@ Now it's time to run the code you built earlier:
 It doesn't have anything fancy for output, so unless you see errors you can wait for it to complete.
 
 ## Finalize output data
-This will generate a single `.h265` file in the current directory. 
+This will generate a single `.265` file in the current directory. 
 This file will not play in standard players; it must first be packed into a container such as mp4.
 
 >TODO: NEED TO FIGURE THIS OUT because FFmpeg does not support HEVC alpha layers yet :(
