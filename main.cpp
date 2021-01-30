@@ -51,12 +51,12 @@ struct MyNv
    };
    int cudaDeviceIndex = 0;
    NV_ENCODE_API_FUNCTION_LIST functions = { NV_ENCODE_API_FUNCTION_LIST_VER };
+   int baseToAlphaBitDistributionRatio = 15;
 } g_nv;
 
 struct MyFile
 {
    std::ifstream inputVideo;
-   std::ifstream inputMask;
    std::ofstream outputVideo;
 } g_file;
 
@@ -64,8 +64,6 @@ struct MyNvBuffer
 {
    NV_ENC_REGISTER_RESOURCE registerResource;
    NV_ENC_MAP_INPUT_RESOURCE inputResource;
-   NV_ENC_PIC_PARAMS picParams;
-   //void * cudaBuffer = nullptr;
 };
 
 struct Args
@@ -148,7 +146,12 @@ NV_ENC_CONFIG CreateInitParamsHevc( void * encoder,
 
    // Anything set here will override the preset
    //presetConfig.presetCfg.rcParams = NV_ENC_PARAMS_RC_CBR;
-   //presetConfig.presetCfg.encodeCodecConfig.hevcConfig.enableAlphaLayerEncoding = 1;
+   
+   if ( g_useAlpha )
+   {
+      presetConfig.presetCfg.encodeCodecConfig.hevcConfig.enableAlphaLayerEncoding = 1;
+      presetConfig.presetCfg.rcParams.alphaLayerBitrateRatio = g_nv.baseToAlphaBitDistributionRatio;
+   }
 
    return presetConfig.presetCfg;
 }
@@ -229,24 +232,12 @@ MyNvBuffer LockInputBuffer( void * encoder,
    };
    NVE_CHECK( (*g_nv.functions.nvEncMapInputResource)( encoder, &returnValue.inputResource ), "Failed mapping CUDA buffer as encoder input" );
    
-   // Create the image wrapper around this buffer
-   returnValue.picParams = {
-      NV_ENC_PIC_PARAMS_VER,
-      uint32_t(width), uint32_t(height), uint32_t(cudaPitch)
-   };
-   
-   returnValue.picParams.inputBuffer = returnValue.inputResource.mappedResource;
-   returnValue.picParams.bufferFmt = g_nv.inputFormat;
-   returnValue.picParams.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
-   
    return returnValue;
 }
 MyNvBuffer LockAlphaBuffer( void * encoder,
    void * cudaContext,
    const MyNvBuffer & inputBuffer )
 {
-   void * cudaBuffer = nullptr;
-
    if ( !g_useAlpha )
    {
       MyNvBuffer emptyReturn = {};
@@ -257,17 +248,23 @@ MyNvBuffer LockAlphaBuffer( void * encoder,
    static std::shared_ptr< MyNvBuffer > returnValue = nullptr;
    if ( returnValue == nullptr )
    {
+      void * cudaBuffer = nullptr;
       std::shared_ptr< MyNvBuffer > newBuffer = std::make_shared< MyNvBuffer >();
+
+      // Open the maks file
+      // Must be the first time here, open and ensure our input video file is good
+      std::ifstream inputMask( args.maskFilename );
+      if ( !inputMask.good() )
+         throw std::runtime_error( "Could not load mask file" );
    
       // TODO: THIS ASSUMES NV12
       uint32_t byteHeight = inputBuffer.registerResource.height * 3 / 2;
-
-      // Create a device buffer first so we have pitch
 
       size_t cudaPitch;
       {
          CudaScope cs( (CUcontext)cudaContext );
 
+         // Create a device buffer first so we have pitch
          CUDA_CHECK( cuMemAllocPitch( (CUdeviceptr *)&cudaBuffer,
             &cudaPitch,
             inputBuffer.registerResource.width,
@@ -280,7 +277,7 @@ MyNvBuffer LockAlphaBuffer( void * encoder,
 
          // Read the frame from disk to our temp buffer
          for( int row = 0; row < byteHeight; ++row )
-            g_file.inputVideo.read( tempBuffer + (row * cudaPitch), inputBuffer.registerResource.width );
+            inputMask.read( tempBuffer + (row * cudaPitch), inputBuffer.registerResource.width );
 
          // Memset chroma to 0x80 per the docs
          memset( tempBuffer + (inputBuffer.registerResource.height * cudaPitch),
@@ -324,16 +321,6 @@ MyNvBuffer LockAlphaBuffer( void * encoder,
       0
    };
    NVE_CHECK( (*g_nv.functions.nvEncMapInputResource)( encoder, &returnValue->inputResource ), "Failed mapping CUDA buffer as encoder input" );
-   
-   // Create the image wrapper around this buffer
-   returnValue->picParams = {
-      NV_ENC_PIC_PARAMS_VER,
-      uint32_t(inputBuffer.registerResource.width),
-      uint32_t(inputBuffer.registerResource.height)
-   };
-   returnValue->picParams.inputBuffer = returnValue->inputResource.mappedResource;
-   returnValue->picParams.bufferFmt = g_nv.inputFormat;
-   returnValue->picParams.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
    
    return *returnValue;
 }
@@ -556,13 +543,14 @@ int main( int argc, char *argv[] )
    }
    
    // Create the output file
-   std::string outputFilename = "outputWithTransparency.h265";
+   std::string outputFilename = "outputWithTransparency.265";
    g_file.outputVideo = CreateOutputFile( outputFilename );
    
    // For every frame
    int inputFrameCount = 0, outputFrameCount = 0;
    bool done = false;
-   std::deque< std::array< MyNvBuffer, 2 > > buffers; // 0=input, 1=mask
+   struct encodeBuffer { MyNvBuffer input; MyNvBuffer alpha; NV_ENC_PIC_PARAMS picParams; };
+   std::deque< encodeBuffer > buffers;
    while ( !done )
    {
       // Allocate and register an input buffer
@@ -589,19 +577,28 @@ int main( int argc, char *argv[] )
          auto alphaBuffer = LockAlphaBuffer( raii.nvEncoder, 
             raii.cudaContext,
             inputBuffer );
-         inputBuffer.picParams.alphaBuffer = alphaBuffer.inputResource.mappedResource;
 
          // Output bitstream
          auto outputBuffer = LockOutputBuffer( raii.nvEncoder,
             inputBuffer,
             g_nv.externalAlloc );
-         inputBuffer.picParams.outputBitstream = outputBuffer;
+
+         // Create a frame, tying all the data together
+         // TODO: WAS SETTING PITCH, but don't think I need to
+         NV_ENC_PIC_PARAMS picParams = { NV_ENC_PIC_PARAMS_VER, uint32_t(args.width), uint32_t(args.height) };
+         picParams.bufferFmt = g_nv.inputFormat;
+         picParams.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
+         picParams.inputBuffer = inputBuffer.inputResource.mappedResource;
+         picParams.alphaBuffer = alphaBuffer.inputResource.mappedResource;
+         picParams.outputBitstream = outputBuffer;
 
          // Keep track of frames to handle encoder latency
-         buffers.push_back( {inputBuffer, alphaBuffer} );
+         buffers.push_back( {inputBuffer, alphaBuffer, picParams} );
          
          // Encode a frame
-         NVENCSTATUS nvStatus = (*g_nv.functions.nvEncEncodePicture)( raii.nvEncoder, &inputBuffer.picParams );
+         NVENCSTATUS nvStatus = (*g_nv.functions.nvEncEncodePicture)( raii.nvEncoder, &picParams );
+         
+         // If we don't need more input to get an output
          if ( nvStatus != NV_ENC_ERR_NEED_MORE_INPUT )
          {
             NVE_CHECK( nvStatus, "Failed to encode frame" );
@@ -610,15 +607,15 @@ int main( int argc, char *argv[] )
             buffers.pop_front();
 
             // Lock output buffer, append to file, unlock
-            NV_ENC_LOCK_BITSTREAM outBitstream = { NV_ENC_LOCK_BITSTREAM_VER }; outBitstream.outputBitstream = buffer[0].picParams.outputBitstream;
+            NV_ENC_LOCK_BITSTREAM outBitstream = { NV_ENC_LOCK_BITSTREAM_VER }; outBitstream.outputBitstream = buffer.picParams.outputBitstream;
             NVE_CHECK( (*g_nv.functions.nvEncLockBitstream)( raii.nvEncoder, &outBitstream ), "Failed locking the output bitstream" );
             g_file.outputVideo.write( (char *)outBitstream.bitstreamBufferPtr, outBitstream.bitstreamSizeInBytes );
             NVE_CHECK( (*g_nv.functions.nvEncUnlockBitstream)( raii.nvEncoder, outBitstream.outputBitstream ), "Failed unlocking the output bitstream" );
 
             // Unlock all buffers
-            UnlockOutputBuffer( raii.nvEncoder, buffer[0].picParams.outputBitstream );
-            UnlockAlphaBuffer( raii.nvEncoder, raii.cudaContext, buffer[1] );
-            UnlockInputBuffer( raii.nvEncoder, raii.cudaContext, buffer[0] );
+            UnlockOutputBuffer( raii.nvEncoder, buffer.picParams.outputBitstream );
+            UnlockAlphaBuffer( raii.nvEncoder, raii.cudaContext, buffer.alpha );
+            UnlockInputBuffer( raii.nvEncoder, raii.cudaContext, buffer.input );
 
             ++outputFrameCount;
          }
